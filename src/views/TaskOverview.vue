@@ -2,22 +2,38 @@
 import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getTask } from '../db';
-import { estimateVehicle, roomProgress, statusColor, statusLabel } from '../utils';
+import {
+  estimateVehicle,
+  roomProgress,
+  orderedSteps,
+  terminalStep,
+  stepColor,
+  stepName,
+} from '../utils';
 import type { MoveTask } from '../types';
 
 const route = useRoute();
 const router = useRouter();
 const task = ref<MoveTask | null>(null);
 
+const terminal = computed(() => (task.value ? terminalStep(task.value) : null));
+
 const stats = computed(() => {
-  if (!task.value) return { total: 0, loaded: 0, unpacked: 0, damaged: 0 };
+  if (!task.value || !terminal.value) return { total: 0, done: 0 };
   const boxes = task.value.boxes;
   return {
     total: boxes.length,
-    loaded: boxes.filter((b) => b.status === 'loaded').length,
-    unpacked: boxes.filter((b) => b.status === 'unpacked').length,
-    damaged: boxes.filter((b) => b.status === 'damaged').length,
+    done: boxes.filter((b) => b.stepId === terminal.value!.id).length,
   };
+});
+
+/** 每个步骤当前有多少箱子（含已停用步骤，便于发现历史数据） */
+const stepCounts = computed(() => {
+  if (!task.value) return [];
+  return orderedSteps(task.value).map((s) => ({
+    step: s,
+    count: task.value!.boxes.filter((b) => b.stepId === s.id).length,
+  }));
 });
 
 const vehicle = computed(() => {
@@ -50,16 +66,10 @@ onMounted(load);
           <div style="font-size:12px;color:var(--text-secondary);">总箱数</div>
         </div>
         <div class="card" style="text-align:center;">
-          <div style="font-size:28px;font-weight:800;color:var(--info);">{{ stats.loaded }}</div>
-          <div style="font-size:12px;color:var(--text-secondary);">已装车</div>
-        </div>
-        <div class="card" style="text-align:center;">
-          <div style="font-size:28px;font-weight:800;color:var(--success);">{{ stats.unpacked }}</div>
-          <div style="font-size:12px;color:var(--text-secondary);">已拆箱</div>
-        </div>
-        <div class="card" style="text-align:center;">
-          <div style="font-size:28px;font-weight:800;color:var(--danger);">{{ stats.damaged }}</div>
-          <div style="font-size:12px;color:var(--text-secondary);">破损</div>
+          <div style="font-size:28px;font-weight:800;color:var(--success);">{{ stats.done }}</div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            已到「{{ terminal?.name ?? '—' }}」
+          </div>
         </div>
       </div>
 
@@ -71,14 +81,35 @@ onMounted(load);
       </div>
 
       <div class="card">
-        <div style="font-weight:700;margin-bottom:8px;">拆箱进度</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-weight:700;">卸货步骤</div>
+          <button class="btn btn-secondary" style="padding:6px 12px;font-size:13px;box-shadow:none;" @click="router.push(`/task/${task.id}/steps`)">
+            管理
+          </button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 14px;">
+          <div v-for="sc in stepCounts" :key="sc.step.id" style="display:flex;align-items:center;gap:6px;font-size:13px;">
+            <span class="status-dot" :style="{background: stepColor(task, sc.step.id)}"></span>
+            <span :style="sc.step.active ? {} : {color: 'var(--text-secondary)', textDecoration: 'line-through'}">
+              {{ sc.step.name }}
+            </span>
+            <span style="color:var(--text-secondary);">{{ sc.count }}</span>
+            <span v-if="!sc.step.active" style="color:var(--danger);font-size:11px;">已停用</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:8px;">
+          {{ terminal ? `「${terminal.name}」进度` : '完成进度' }}
+        </div>
         <div v-for="rs in roomStats" :key="rs.room" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;font-size:14px;">
             <span>{{ rs.room }}</span>
-            <span>{{ rs.unpacked }}/{{ rs.total }}</span>
+            <span>{{ rs.done }}/{{ rs.total }}</span>
           </div>
-          <div style="height:8px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:4px;">
-            <div :style="{width: rs.total ? `${(rs.unpacked/rs.total)*100}%` : '0%', height:'100%', background:'var(--success)', borderRadius:'999px'}"></div>
+          <div class="progress-track">
+            <div class="progress-fill" :style="{width: rs.total ? `${(rs.done/rs.total)*100}%` : '0%'}"></div>
           </div>
         </div>
       </div>
@@ -88,20 +119,47 @@ onMounted(load);
         <button class="btn" @click="router.push(`/task/${task.id}/scan`)">扫码查箱</button>
         <button class="btn" @click="router.push(`/task/${task.id}/check`)">卸货核对</button>
         <button class="btn" @click="router.push(`/task/${task.id}/labels`)">标签打印</button>
+        <button class="btn btn-secondary" @click="router.push(`/task/${task.id}/steps`)">卸货步骤</button>
       </div>
 
       <div class="card">
         <div style="font-weight:700;margin-bottom:8px;">最近封箱</div>
         <div v-if="task.boxes.length === 0" class="empty" style="padding:12px 0;">还没有箱子，去封箱登记吧</div>
-        <div v-for="b in [...task.boxes].reverse().slice(0,10)" :key="b.id" class="card" @click="router.push(`/task/${task.id}/box/${b.code}`)" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-          <span class="status-dot" :style="{background: statusColor(b.status)}"></span>
+        <div v-for="b in [...task.boxes].reverse().slice(0,10)" :key="b.id" class="box-item" @click="router.push(`/task/${task.id}/box/${b.code}`)">
+          <span class="status-dot" :style="{background: stepColor(task, b.stepId)}"></span>
           <div style="flex:1;">
             <div style="font-weight:700;">{{ b.code }}</div>
             <div style="font-size:12px;color:var(--text-secondary);">{{ b.roomTo }} · {{ b.tags.join(', ') || '无标签' }}</div>
           </div>
-          <span style="font-size:12px;color:var(--text-secondary);">{{ statusLabel(b.status) }}</span>
+          <span style="font-size:12px;color:var(--text-secondary);">{{ stepName(task, b.stepId) }}</span>
         </div>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.progress-track {
+  height: 8px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 999px;
+}
+.box-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+}
+.box-item:active {
+  background: var(--border);
+}
+</style>

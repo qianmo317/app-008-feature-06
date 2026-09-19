@@ -2,14 +2,22 @@
 import { ref, onMounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { getTask, updateBox } from '../db';
-import { statusColor, statusLabel } from '../utils';
-import type { MoveTask, Box, BoxStatus } from '../types';
+import {
+  selectableSteps,
+  terminalStep,
+  stepColor,
+  stepName,
+} from '../utils';
+import type { MoveTask, Box } from '../types';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
 const route = useRoute();
 const task = ref<MoveTask | null>(null);
 const pdfArea = ref<HTMLDivElement | null>(null);
+
+const steps = computed(() => (task.value ? selectableSteps(task.value) : []));
+const terminal = computed(() => (task.value ? terminalStep(task.value) : null));
 
 const grouped = computed(() => {
   if (!task.value) return [] as { room: string; boxes: Box[] }[];
@@ -19,23 +27,24 @@ const grouped = computed(() => {
   })).filter((g) => g.boxes.length > 0);
 });
 
-const missingList = computed(() => {
-  if (!task.value) return [];
-  return task.value.boxes.filter((b) => b.status === 'missing');
-});
-
-const damagedList = computed(() => {
-  if (!task.value) return [];
-  return task.value.boxes.filter((b) => b.status === 'damaged');
+/** 还没走到最后一步的箱子（替代旧版固定的缺件/破损清单） */
+const unfinishedList = computed(() => {
+  if (!task.value || !terminal.value) return [];
+  const tId = terminal.value.id;
+  return task.value.boxes.filter((b) => b.stepId !== tId);
 });
 
 async function load() {
   task.value = await getTask(route.params.id as string);
 }
 
-async function setStatus(box: Box, status: BoxStatus) {
+function nameOf(stepId: string): string {
+  return task.value ? stepName(task.value, stepId) : '';
+}
+
+async function setStep(box: Box, stepId: string) {
   if (!task.value) return;
-  box.status = status;
+  box.stepId = stepId;
   box.updatedAt = Date.now();
   await updateBox(task.value.id, box);
 }
@@ -47,14 +56,14 @@ function exportSheet() {
     `日期: ${task.value.date}`,
     `从: ${task.value.from} → 到: ${task.value.to}`,
     '',
-    '箱号,目标房间,标签,易碎,液体禁运,状态,备注',
+    '箱号,目标房间,标签,易碎,液体禁运,步骤,备注',
     ...task.value.boxes.map((b) => [
       b.code,
       b.roomTo,
       b.tags.join(';'),
       b.fragile ? '是' : '否',
       b.liquid ? '是' : '否',
-      statusLabel(b.status),
+      stepName(task.value!, b.stepId),
       b.note || '',
     ].join(',')),
   ];
@@ -103,33 +112,37 @@ onMounted(load);
       </div>
     </div>
     <div class="page">
+      <div v-if="steps.length === 0" class="card" style="font-size:13px;color:var(--warning);">
+        本任务还没有启用中的卸货步骤，请到任务页的「卸货步骤」中启用或新增。
+      </div>
       <div v-if="grouped.length === 0" class="empty">还没有箱子</div>
       <div v-for="g in grouped" :key="g.room" class="card">
         <div style="font-weight:700;margin-bottom:10px;">{{ g.room }} ({{ g.boxes.length }} 箱)</div>
-        <div v-for="b in g.boxes" :key="b.id" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border);">
-          <span class="status-dot" :style="{background: statusColor(b.status)}"></span>
-          <div style="flex:1;">
+        <div v-for="b in g.boxes" :key="b.id" class="box-line">
+          <span class="status-dot" :style="{background: stepColor(task, b.stepId)}"></span>
+          <div style="flex:1;min-width:0;">
             <div style="font-weight:700;">{{ b.code }}</div>
             <div style="font-size:12px;color:var(--text-secondary);">{{ b.tags.join(', ') }}</div>
           </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="tag" :class="{active: b.status === 'arrived'}" @click="setStatus(b, 'arrived')">已到</button>
-            <button class="tag" :class="{active: b.status === 'damaged'}" @click="setStatus(b, 'damaged')">破损</button>
-            <button class="tag" :class="{active: b.status === 'missing'}" @click="setStatus(b, 'missing')">缺失</button>
+          <div class="step-btns">
+            <button
+              v-for="s in steps"
+              :key="s.id"
+              class="tag"
+              :class="{active: b.stepId === s.id}"
+              @click="setStep(b, s.id)"
+            >{{ s.name }}</button>
           </div>
         </div>
       </div>
 
-      <div v-if="missingList.length" class="card" style="border-left:4px solid var(--warning);">
-        <div style="font-weight:700;color:var(--warning);">缺件清单 ({{ missingList.length }})</div>
-        <div v-for="b in missingList" :key="b.id" style="font-size:14px;margin-top:6px;">
-          {{ b.code }} · {{ b.roomTo }}
+      <div v-if="unfinishedList.length && terminal" class="card" style="border-left:4px solid var(--warning);">
+        <div style="font-weight:700;color:var(--warning);">
+          未完成「{{ terminal.name }}」清单 ({{ unfinishedList.length }})
         </div>
-      </div>
-      <div v-if="damagedList.length" class="card" style="border-left:4px solid var(--danger);">
-        <div style="font-weight:700;color:var(--danger);">破损清单 ({{ damagedList.length }})</div>
-        <div v-for="b in damagedList" :key="b.id" style="font-size:14px;margin-top:6px;">
-          {{ b.code }} · {{ b.roomTo }}
+        <div v-for="b in unfinishedList" :key="b.id" class="unfinished-row">
+          {{ b.code }} · {{ b.roomTo }} ·
+          <span :style="{color: stepColor(task, b.stepId)}">{{ stepName(task, b.stepId) }}</span>
         </div>
       </div>
 
@@ -145,7 +158,7 @@ onMounted(load);
               <th style="border:1px solid #ccc;padding:6px;text-align:left;">标签</th>
               <th style="border:1px solid #ccc;padding:6px;text-align:left;">易碎</th>
               <th style="border:1px solid #ccc;padding:6px;text-align:left;">液体禁运</th>
-              <th style="border:1px solid #ccc;padding:6px;text-align:left;">状态</th>
+              <th style="border:1px solid #ccc;padding:6px;text-align:left;">步骤</th>
               <th style="border:1px solid #ccc;padding:6px;text-align:left;">备注</th>
             </tr>
           </thead>
@@ -156,18 +169,36 @@ onMounted(load);
               <td style="border:1px solid #ccc;padding:6px;">{{ b.tags.join('; ') }}</td>
               <td style="border:1px solid #ccc;padding:6px;">{{ b.fragile ? '是' : '' }}</td>
               <td style="border:1px solid #ccc;padding:6px;">{{ b.liquid ? '是' : '' }}</td>
-              <td style="border:1px solid #ccc;padding:6px;">{{ statusLabel(b.status) }}</td>
+              <td style="border:1px solid #ccc;padding:6px;">{{ stepName(task, b.stepId) }}</td>
               <td style="border:1px solid #ccc;padding:6px;">{{ b.note || '' }}</td>
             </tr>
           </tbody>
         </table>
-        <div v-if="missingList.length" style="margin-top:16px;color:#d97706;">
-          <strong>缺件清单:</strong> {{ missingList.map(x => x.code).join(', ') }}
-        </div>
-        <div v-if="damagedList.length" style="margin-top:8px;color:#ef4444;">
-          <strong>破损清单:</strong> {{ damagedList.map(x => x.code).join(', ') }}
+        <div v-if="unfinishedList.length && terminal" style="margin-top:16px;color:#d97706;">
+          <strong>未完成「{{ terminal.name }}」清单:</strong>
+          {{ unfinishedList.map(x => `${x.code}(${nameOf(x.stepId)})`).join(', ') }}
         </div>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.box-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.step-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.unfinished-row {
+  font-size: 14px;
+  margin-top: 6px;
+}
+</style>

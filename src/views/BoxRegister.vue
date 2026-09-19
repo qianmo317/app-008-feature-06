@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getTask, saveTask } from '../db';
-import { uid, compressImage, generateBoxCode } from '../utils';
+import { uid, compressImage, generateBoxCode, selectableSteps } from '../utils';
 import type { MoveTask, Box } from '../types';
 
 const route = useRoute();
@@ -42,6 +42,11 @@ async function submit() {
     return;
   }
   const code = generateBoxCode(task.value, roomTo.value);
+  const firstStep = selectableSteps(task.value)[0];
+  if (!firstStep) {
+    alert('当前任务没有可用的卸货步骤，请先到「卸货步骤」中启用至少一个步骤');
+    return;
+  }
   const box: Box = {
     id: uid(),
     code,
@@ -52,7 +57,7 @@ async function submit() {
     liquid: liquid.value,
     photo: photoData.value || undefined,
     weightKg: weightKg.value ?? undefined,
-    status: 'packed',
+    stepId: firstStep.id,
     note: note.value || undefined,
     createdAt: Date.now(),
     updatedAt: Date.now(),

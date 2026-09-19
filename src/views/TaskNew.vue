@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { saveTask } from '../db';
-import { uid, todayStr } from '../utils';
+import { uid, todayStr, defaultSteps } from '../utils';
 import type { MoveTask } from '../types';
 
 const router = useRouter();
@@ -25,6 +25,7 @@ async function submit() {
     to: to.value,
     date: date.value,
     rooms,
+    steps: defaultSteps(),
     boxes: [],
     createdAt: Date.now(),
   };
@@ -59,6 +60,9 @@ async function submit() {
       <div class="card">
         <label class="label">房间清单（用逗号分隔）</label>
         <input v-model="roomsText" class="input" />
+      </div>
+      <div class="card" style="font-size:13px;color:var(--text-secondary);">
+        卸货步骤默认使用「待打包 → 已装车 → 已到达 → 破损 → 缺失 → 已拆箱」，创建后可在任务页的「卸货步骤」中自行增删、改名和排序。
       </div>
       <button class="btn btn-block" @click="submit">创建任务</button>
     </div>

@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getTask, updateBox, deleteBox } from '../db';
-import { generateQRDataURL, statusColor, statusLabel } from '../utils';
-import type { MoveTask, Box, BoxStatus } from '../types';
+import {
+  generateQRDataURL,
+  selectableSteps,
+  getStep,
+  stepColor,
+  stepName,
+} from '../utils';
+import type { MoveTask, Box } from '../types';
 
 const route = useRoute();
 const router = useRouter();
@@ -11,7 +17,10 @@ const task = ref<MoveTask | null>(null);
 const box = ref<Box | null>(null);
 const qrUrl = ref('');
 
-const statuses: BoxStatus[] = ['packed', 'loaded', 'arrived', 'unpacked', 'damaged', 'missing'];
+const steps = computed(() => (task.value ? selectableSteps(task.value) : []));
+const currentStep = computed(() =>
+  task.value && box.value ? getStep(task.value, box.value.stepId) : undefined
+);
 
 async function load() {
   const t = await getTask(route.params.id as string);
@@ -23,9 +32,9 @@ async function load() {
   qrUrl.value = await generateQRDataURL(t.id, b.code);
 }
 
-async function setStatus(s: BoxStatus) {
+async function setStep(stepId: string) {
   if (!box.value || !task.value) return;
-  box.value.status = s;
+  box.value.stepId = stepId;
   box.value.updatedAt = Date.now();
   await updateBox(task.value.id, box.value);
 }
@@ -53,13 +62,23 @@ onMounted(load);
       </div>
 
       <div class="card">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-          <span class="status-dot" :style="{background: statusColor(box.status)}"></span>
-          <span style="font-weight:700;">{{ statusLabel(box.status) }}</span>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+          <span class="status-dot" :style="{background: stepColor(task, box.stepId)}"></span>
+          <span style="font-weight:700;">{{ stepName(task, box.stepId) }}</span>
+          <span v-if="currentStep && !currentStep.active" style="font-size:12px;color:var(--danger);">（该步骤已停用）</span>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-          <button v-for="s in statuses" :key="s" class="tag" :class="{active: box.status === s}" @click="setStatus(s)">
-            {{ statusLabel(s) }}
+        <div v-if="steps.length === 0" style="font-size:13px;color:var(--warning);margin:8px 0;">
+          本任务还没有启用中的步骤，请到「卸货步骤」中启用或新增。
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
+          <button
+            v-for="s in steps"
+            :key="s.id"
+            class="tag"
+            :class="{active: box.stepId === s.id}"
+            @click="setStep(s.id)"
+          >
+            {{ s.name }}
           </button>
         </div>
       </div>

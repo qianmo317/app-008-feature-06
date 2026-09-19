@@ -9,6 +9,7 @@ const routes = [
   { path: '/task/:id/labels', name: 'LabelsPrint', component: () => import('./views/LabelsPrint.vue') },
   { path: '/task/:id/scan', name: 'ScanCheck', component: () => import('./views/ScanCheck.vue') },
   { path: '/task/:id/check', name: 'DeliveryCheck', component: () => import('./views/DeliveryCheck.vue') },
+  { path: '/task/:id/steps', name: 'StepsManage', component: () => import('./views/StepsManage.vue') },
 ];
 
 export default createRouter({

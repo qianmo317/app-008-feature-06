@@ -1,8 +1,91 @@
 import QRCode from 'qrcode';
-import type { MoveTask, BoxStatus } from './types';
+import type { MoveTask, UnloadStep } from './types';
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+/**
+ * 旧版六档状态的默认步骤定义，新建任务时沿用，同时作为老数据迁移基准。
+ * 「已拆箱」固定在最后作为完成态（旧版房间进度即按已拆箱统计），
+ * 破损/缺失作为异常状态紧挨其前；用户之后可自行改名、排序、停用。
+ */
+export const DEFAULT_STEP_DEFS: { id: string; name: string }[] = [
+  { id: 'packed', name: '待打包' },
+  { id: 'loaded', name: '已装车' },
+  { id: 'arrived', name: '已到达' },
+  { id: 'damaged', name: '破损' },
+  { id: 'missing', name: '缺失' },
+  { id: 'unpacked', name: '已拆箱' },
+];
+
+/** 新建任务默认携带的卸货步骤 */
+export function defaultSteps(): UnloadStep[] {
+  return DEFAULT_STEP_DEFS.map((d, i) => ({ id: d.id, name: d.name, order: i, active: true }));
+}
+
+/** 生成一个任务内唯一的新步骤 id */
+export function newStepId(existing: UnloadStep[]): string {
+  let id = uid();
+  while (existing.some((s) => s.id === id)) id = uid();
+  return id;
+}
+
+/** 按 order 排序的全部步骤 */
+export function orderedSteps(task: MoveTask): UnloadStep[] {
+  return [...task.steps].sort((a, b) => a.order - b.order);
+}
+
+/** 可在扫码页/详情页中选择的步骤（启用中），按顺序排列 */
+export function selectableSteps(task: MoveTask): UnloadStep[] {
+  return orderedSteps(task).filter((s) => s.active);
+}
+
+/** 任务的最后一步（完成态），即使被停用也算（可能已有箱子停在该步） */
+export function terminalStep(task: MoveTask): UnloadStep | null {
+  const list = orderedSteps(task);
+  return list.length ? list[list.length - 1] : null;
+}
+
+export function getStep(task: MoveTask, stepId: string): UnloadStep | undefined {
+  return task.steps.find((s) => s.id === stepId);
+}
+
+export function stepName(task: MoveTask, stepId: string): string {
+  return getStep(task, stepId)?.name ?? '未知步骤';
+}
+
+/** 步骤是否被任何箱子使用中 */
+export function stepInUse(task: MoveTask, stepId: string): boolean {
+  return task.boxes.some((b) => b.stepId === stepId);
+}
+
+/** 步骤名字的重复校验（去首尾空格后比较），excludeId 用于编辑时排除自身 */
+export function duplicateStepName(task: MoveTask, name: string, excludeId?: string): boolean {
+  const n = name.trim();
+  return task.steps.some((s) => s.id !== excludeId && s.name.trim() === n);
+}
+
+// 颜色按步骤在流程中的位置轮转；最后一步固定绿色作为完成态
+const STEP_COLORS = [
+  '#9ca3af', // 灰
+  '#3b82f6', // 蓝
+  '#f59e0b', // 橙
+  '#8b5cf6', // 紫
+  '#06b6d4', // 青
+  '#ec4899', // 粉
+  '#84cc16', // 黄绿
+  '#f97316', // 深橙
+  '#14b8a6', // 蓝绿
+  '#a855f7', // 深紫
+];
+
+export function stepColor(task: MoveTask, stepId: string): string {
+  const list = orderedSteps(task);
+  const idx = list.findIndex((s) => s.id === stepId);
+  if (idx === -1) return '#9ca3af';
+  if (idx === list.length - 1) return '#22c55e';
+  return STEP_COLORS[idx % STEP_COLORS.length];
 }
 
 export function todayStr(): string {
@@ -79,37 +162,6 @@ export function parseQRContent(text: string): { taskId?: string; code?: string }
   return { taskId: match[1], code: match[2] };
 }
 
-export function statusColor(status: BoxStatus): string {
-  switch (status) {
-    case 'packed':
-      return '#9ca3af';
-    case 'loaded':
-      return '#3b82f6';
-    case 'arrived':
-      return '#22c55e';
-    case 'unpacked':
-      return '#10b981';
-    case 'damaged':
-      return '#ef4444';
-    case 'missing':
-      return '#f59e0b';
-    default:
-      return '#9ca3af';
-  }
-}
-
-export function statusLabel(status: BoxStatus): string {
-  const map: Record<BoxStatus, string> = {
-    packed: '待打包',
-    loaded: '已装车',
-    arrived: '已到达',
-    unpacked: '已拆箱',
-    damaged: '破损',
-    missing: '缺失',
-  };
-  return map[status];
-}
-
 export function estimateVehicle(boxCount: number, avgVolumeM3 = 0.08): { vehicle: string; suggestion: string } {
   const totalVolume = boxCount * avgVolumeM3;
   if (totalVolume <= 8) return { vehicle: '面包车/小型货车', suggestion: '建议选用 4.2m 厢式货车或面包车' };
@@ -117,11 +169,12 @@ export function estimateVehicle(boxCount: number, avgVolumeM3 = 0.08): { vehicle
   return { vehicle: '大型货车/多车', suggestion: '箱数较多，建议选用 9.6m 货车或分多车运输' };
 }
 
-export function roomProgress(task: MoveTask, room: string): { total: number; unpacked: number; damaged: number } {
+/** 房间维度的进度：done = 停在任务最后一步的箱子数 */
+export function roomProgress(task: MoveTask, room: string): { total: number; done: number } {
   const boxes = task.boxes.filter((b) => b.roomTo === room);
+  const terminal = terminalStep(task);
   return {
     total: boxes.length,
-    unpacked: boxes.filter((b) => b.status === 'unpacked').length,
-    damaged: boxes.filter((b) => b.status === 'damaged').length,
+    done: terminal ? boxes.filter((b) => b.stepId === terminal.id).length : 0,
   };
 }
