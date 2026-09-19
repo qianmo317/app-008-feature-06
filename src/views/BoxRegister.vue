@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getTask, saveTask } from '../db';
-import { uid, compressImage, generateBoxCode } from '../utils';
+import { uid, compressImage, generateBoxCode, activeSteps } from '../utils';
 import type { MoveTask, Box } from '../types';
 
 const route = useRoute();
@@ -41,6 +41,11 @@ async function submit() {
     alert('请选择目标房间');
     return;
   }
+  const firstStep = activeSteps(task.value)[0];
+  if (!firstStep) {
+    alert('当前任务还没有启用的卸货步骤，请先在“卸货步骤”里添加');
+    return;
+  }
   const code = generateBoxCode(task.value, roomTo.value);
   const box: Box = {
     id: uid(),
@@ -52,12 +57,14 @@ async function submit() {
     liquid: liquid.value,
     photo: photoData.value || undefined,
     weightKg: weightKg.value ?? undefined,
-    status: 'packed',
+    status: firstStep.id,
     note: note.value || undefined,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
   task.value.boxes.push(box);
+  const firstStepRef = task.value.steps.find((s) => s.id === firstStep.id);
+  if (firstStepRef) firstStepRef.used = true;
   await saveTask(task.value);
   if (confirm(`箱号 ${code} 已生成，是否继续封箱？`)) {
     tags.value = [];

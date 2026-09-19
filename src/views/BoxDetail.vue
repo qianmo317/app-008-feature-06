@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getTask, updateBox, deleteBox } from '../db';
-import { generateQRDataURL, statusColor, statusLabel } from '../utils';
-import type { MoveTask, Box, BoxStatus } from '../types';
+import { generateQRDataURL, stepColor, stepName, findStep, activeSteps } from '../utils';
+import type { MoveTask, Box } from '../types';
 
 const route = useRoute();
 const router = useRouter();
@@ -11,7 +11,12 @@ const task = ref<MoveTask | null>(null);
 const box = ref<Box | null>(null);
 const qrUrl = ref('');
 
-const statuses: BoxStatus[] = ['packed', 'loaded', 'arrived', 'unpacked', 'damaged', 'missing'];
+const choices = computed(() => (task.value ? activeSteps(task.value) : []));
+
+/** 箱子正停在已停用/已删除的步骤上时，仍要把当前步骤显示出来 */
+const currentStepMissing = computed(() =>
+  task.value && box.value ? !findStep(task.value, box.value.status) : false,
+);
 
 async function load() {
   const t = await getTask(route.params.id as string);
@@ -23,9 +28,9 @@ async function load() {
   qrUrl.value = await generateQRDataURL(t.id, b.code);
 }
 
-async function setStatus(s: BoxStatus) {
+async function setStatus(stepId: string) {
   if (!box.value || !task.value) return;
-  box.value.status = s;
+  box.value.status = stepId;
   box.value.updatedAt = Date.now();
   await updateBox(task.value.id, box.value);
 }
@@ -54,13 +59,24 @@ onMounted(load);
 
       <div class="card">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-          <span class="status-dot" :style="{background: statusColor(box.status)}"></span>
-          <span style="font-weight:700;">{{ statusLabel(box.status) }}</span>
+          <span class="status-dot" :style="{background: stepColor(task, box.status)}"></span>
+          <span style="font-weight:700;">{{ stepName(task, box.status) }}</span>
+          <span v-if="currentStepMissing" style="font-size:12px;color:var(--warning);">（该步骤已停用或删除）</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-          <button v-for="s in statuses" :key="s" class="tag" :class="{active: box.status === s}" @click="setStatus(s)">
-            {{ statusLabel(s) }}
+          <button
+            v-for="s in choices"
+            :key="s.id"
+            class="tag"
+            :class="{active: box.status === s.id}"
+            @click="setStatus(s.id)"
+          >
+            {{ s.name }}
           </button>
+        </div>
+        <div v-if="choices.length === 0" style="font-size:13px;color:var(--text-secondary);">
+          当前任务没有启用的步骤，
+          <router-link :to="`/task/${task.id}/steps`" style="color:var(--primary-dark);">去设置</router-link>
         </div>
       </div>
 

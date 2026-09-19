@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getTask, updateBox } from '../db';
-import { parseQRContent, vibrateShort, playBeep, statusColor, statusLabel } from '../utils';
+import { parseQRContent, vibrateShort, playBeep, stepColor, stepName, findStep, activeSteps } from '../utils';
 import type { MoveTask, Box } from '../types';
 
 const route = useRoute();
@@ -15,6 +15,8 @@ const errorMsg = ref('');
 let stream: MediaStream | null = null;
 const videoRef = ref<HTMLVideoElement | null>(null);
 const scanning = ref(false);
+
+const choices = computed(() => (task.value ? activeSteps(task.value) : []));
 
 async function load() {
   task.value = await getTask(route.params.id as string);
@@ -144,19 +146,23 @@ onUnmounted(() => {
           <div style="font-size:36px;font-weight:800;">{{ foundBox.code }}</div>
           <div style="font-size:16px;color:var(--text-secondary);margin-top:4px;">{{ foundBox.roomTo }}</div>
           <div style="margin-top:10px;">
-            <span class="status-dot" :style="{background: statusColor(foundBox.status)}"></span>
-            <span style="margin-left:6px;">{{ statusLabel(foundBox.status) }}</span>
+            <span class="status-dot" :style="{background: stepColor(task, foundBox.status)}"></span>
+            <span style="margin-left:6px;">{{ stepName(task, foundBox.status) }}</span>
+            <span v-if="!findStep(task, foundBox.status)" style="margin-left:6px;font-size:12px;color:var(--warning);">（步骤已停用）</span>
           </div>
         </div>
         <div class="card">
-          <div style="font-weight:700;margin-bottom:8px;">快速改状态</div>
+          <div style="font-weight:700;margin-bottom:8px;">快速改步骤</div>
           <div style="display:flex;flex-wrap:wrap;gap:8px;">
-            <button class="tag" :class="{active: foundBox.status === 'packed'}" @click="setStatus('packed')">待打包</button>
-            <button class="tag" :class="{active: foundBox.status === 'loaded'}" @click="setStatus('loaded')">已装车</button>
-            <button class="tag" :class="{active: foundBox.status === 'arrived'}" @click="setStatus('arrived')">已到达</button>
-            <button class="tag" :class="{active: foundBox.status === 'unpacked'}" @click="setStatus('unpacked')">已拆箱</button>
-            <button class="tag" :class="{active: foundBox.status === 'damaged'}" @click="setStatus('damaged')">破损</button>
-            <button class="tag" :class="{active: foundBox.status === 'missing'}" @click="setStatus('missing')">缺失</button>
+            <button
+              v-for="s in choices"
+              :key="s.id"
+              class="tag"
+              :class="{active: foundBox.status === s.id}"
+              @click="setStatus(s.id)"
+            >
+              {{ s.name }}
+            </button>
           </div>
         </div>
         <div class="toolbar">

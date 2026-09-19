@@ -1,5 +1,5 @@
 import QRCode from 'qrcode';
-import type { MoveTask, BoxStatus } from './types';
+import type { MoveTask, TaskStep } from './types';
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -79,35 +79,46 @@ export function parseQRContent(text: string): { taskId?: string; code?: string }
   return { taskId: match[1], code: match[2] };
 }
 
-export function statusColor(status: BoxStatus): string {
-  switch (status) {
-    case 'packed':
-      return '#9ca3af';
-    case 'loaded':
-      return '#3b82f6';
-    case 'arrived':
-      return '#22c55e';
-    case 'unpacked':
-      return '#10b981';
-    case 'damaged':
-      return '#ef4444';
-    case 'missing':
-      return '#f59e0b';
-    default:
-      return '#9ca3af';
-  }
+const STEP_PALETTE = [
+  '#3b82f6', // 蓝
+  '#10b981', // 青绿
+  '#0ea5e9', // 天蓝
+  '#8b5cf6', // 紫
+  '#ec4899', // 粉
+  '#14b8a6', // 蓝绿
+  '#f59e0b', // 琥珀
+];
+
+/** 首档灰、末档绿（完成），中间按顺序取色；名为破损/缺失类的异常步骤给警示色 */
+export function stepColor(task: MoveTask, stepId: string): string {
+  const step = findStep(task, stepId);
+  if (!step) return '#9ca3af';
+  if (/破|损/.test(step.name)) return '#ef4444';
+  if (/缺|失/.test(step.name)) return '#f59e0b';
+  const idx = task.steps.indexOf(step);
+  if (idx === 0) return '#9ca3af';
+  if (idx === task.steps.length - 1) return '#22c55e';
+  return STEP_PALETTE[(idx - 1) % STEP_PALETTE.length];
 }
 
-export function statusLabel(status: BoxStatus): string {
-  const map: Record<BoxStatus, string> = {
-    packed: '待打包',
-    loaded: '已装车',
-    arrived: '已到达',
-    unpacked: '已拆箱',
-    damaged: '破损',
-    missing: '缺失',
-  };
-  return map[status];
+export function findStep(task: MoveTask, stepId: string): TaskStep | undefined {
+  return task.steps.find((s) => s.id === stepId);
+}
+
+export function stepName(task: MoveTask, stepId: string): string {
+  return findStep(task, stepId)?.name ?? '未知步骤';
+}
+
+/** 扫码页/详情页只展示启用中的步骤，顺序与任务定义一致 */
+export function activeSteps(task: MoveTask): TaskStep[] {
+  return task.steps.filter((s) => s.active);
+}
+
+/** 箱子当前停在（含）目标步骤之后的哪一档，用于进度统计 */
+function boxReached(task: MoveTask, stepId: string, targetId: string): boolean {
+  const a = task.steps.findIndex((s) => s.id === stepId);
+  const b = task.steps.findIndex((s) => s.id === targetId);
+  return a !== -1 && b !== -1 && a >= b;
 }
 
 export function estimateVehicle(boxCount: number, avgVolumeM3 = 0.08): { vehicle: string; suggestion: string } {
@@ -117,11 +128,20 @@ export function estimateVehicle(boxCount: number, avgVolumeM3 = 0.08): { vehicle
   return { vehicle: '大型货车/多车', suggestion: '箱数较多，建议选用 9.6m 货车或分多车运输' };
 }
 
-export function roomProgress(task: MoveTask, room: string): { total: number; unpacked: number; damaged: number } {
+/** 拆箱进度以任务最后一个启用步骤为“完成”口径 */
+export function roomProgress(task: MoveTask, room: string): { total: number; done: number } {
   const boxes = task.boxes.filter((b) => b.roomTo === room);
+  const doneStep = activeSteps(task).at(-1);
   return {
     total: boxes.length,
-    unpacked: boxes.filter((b) => b.status === 'unpacked').length,
-    damaged: boxes.filter((b) => b.status === 'damaged').length,
+    done: doneStep ? boxes.filter((b) => boxReached(task, b.status, doneStep.id)).length : 0,
   };
+}
+
+/** 全任务各步骤的箱子数量（含停用步骤，老数据也要能显示） */
+export function stepCounts(task: MoveTask): { step: TaskStep; count: number }[] {
+  return task.steps.map((step) => ({
+    step,
+    count: task.boxes.filter((b) => b.status === step.id).length,
+  }));
 }

@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { saveTask } from '../db';
 import { uid, todayStr } from '../utils';
+import { createDefaultSteps } from '../types';
 import type { MoveTask } from '../types';
 
 const router = useRouter();
@@ -25,6 +26,7 @@ async function submit() {
     to: to.value,
     date: date.value,
     rooms,
+    steps: createDefaultSteps(),
     boxes: [],
     createdAt: Date.now(),
   };
